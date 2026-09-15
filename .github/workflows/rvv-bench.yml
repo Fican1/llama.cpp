@@ -1,0 +1,53 @@
+name: rvv-bench
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [vectorboundary]
+    paths: ['.github/workflows/rvv-bench.yml']
+
+jobs:
+  bench:
+    runs-on: [self-hosted, bpi-f3]
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: probe environment
+        run: |
+          uname -a
+          cat /proc/cpuinfo | head -20
+          gcc --version | head -1 || true
+          command -v gcc-14 && gcc-14 --version | head -1 || echo "no gcc-14"
+          command -v clang && clang --version | head -1 || echo "no clang"
+          nproc; free -h; df -h . | tail -1
+
+      - name: build llama-bench
+        run: |
+          if command -v gcc-14 > /dev/null; then export CC=gcc-14 CXX=g++-14; fi
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF
+          cmake --build build -j"$(nproc)" --target llama-bench
+
+      - name: fetch model
+        run: |
+          curl -sL --retry 3 -o smol-q4_0.gguf \
+            "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_0.gguf"
+          ls -la smol-q4_0.gguf
+
+      - name: bench schedules
+        run: |
+          for sched in default q4_0_8x1 q4_0_16x1 q4_0_8x8; do
+            if [ "$sched" = "default" ]; then
+              unset GGML_RVV_SCHEDULE || true
+            else
+              export GGML_RVV_SCHEDULE=$sched
+            fi
+            echo "=== sched=$sched ==="
+            ./build/bin/llama-bench -m smol-q4_0.gguf -p 512,32 -n 128,8 -r 3 -t 4,8 -o csv \
+              | tee bench-$sched.csv
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rvv-bench-results
+          path: bench-*.csv
