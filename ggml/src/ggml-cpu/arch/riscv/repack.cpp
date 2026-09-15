@@ -196,7 +196,7 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
             __riscv_vse32_v_f32m2(s + x * ncols_interleaved, sumf, vl / 4);
         }
         return;
-    } else if (__riscv_vlenb() >= QK4_0) {
+    } else if (__riscv_vlenb() == QK4_0) {
         const size_t vl = QK4_0;
 
         const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
@@ -1255,7 +1255,7 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         }
 
         return;
-    } else if (__riscv_vlenb() >= QK4_0) {
+    } else if (__riscv_vlenb() == QK4_0) {
         const size_t vl = QK4_0;
 
         for (int y = 0; y < nr / 4; y++) {

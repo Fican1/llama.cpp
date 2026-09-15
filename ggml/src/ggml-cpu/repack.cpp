@@ -5433,46 +5433,48 @@ struct ggml_rvv_schedule_entry {
     int            nb_cols;    // interleaved rows, constrains ne[1]
     int            inter_size;
     int            min_vlenb;  // below this vl clamps and results are wrong
+    int            max_vlenb;  // above this the kernel has no vector path
     const ggml::cpu::tensor_traits * traits;
 };
 
 static const ggml_rvv_schedule_entry ggml_rvv_schedules[] = {
 #if defined __riscv_zvfh
-    { "q4_0_8x1",     GGML_TYPE_Q4_0,   8,  1,  16, &q4_0_8x1_q8_0     },
-    { "q4_0_16x1",    GGML_TYPE_Q4_0,   16, 1,  32, &q4_0_16x1_q8_0    },
-    { "q4_0_32x1",    GGML_TYPE_Q4_0,   32, 1,  64, &q4_0_32x1_q8_0    },
-    { "q4_0_64x1",    GGML_TYPE_Q4_0,   64, 1, 128, &q4_0_64x1_q8_0    },
-    { "q8_0_8x1",     GGML_TYPE_Q8_0,   8,  1,  16, &q8_0_8x1_q8_0     },
-    { "q8_0_16x1",    GGML_TYPE_Q8_0,   16, 1,  32, &q8_0_16x1_q8_0    },
-    { "q8_0_32x1",    GGML_TYPE_Q8_0,   32, 1,  64, &q8_0_32x1_q8_0    },
-    { "q8_0_64x1",    GGML_TYPE_Q8_0,   64, 1, 128, &q8_0_64x1_q8_0    },
-    { "q2_K_8x1",     GGML_TYPE_Q2_K,   8,  1,  16, &q2_K_8x1_q8_K     },
-    { "q2_K_16x1",    GGML_TYPE_Q2_K,   16, 1,  32, &q2_K_16x1_q8_K    },
-    { "q2_K_32x1",    GGML_TYPE_Q2_K,   32, 1,  64, &q2_K_32x1_q8_K    },
-    { "q2_K_64x1",    GGML_TYPE_Q2_K,   64, 1, 128, &q2_K_64x1_q8_K    },
-    { "q4_K_8x1",     GGML_TYPE_Q4_K,   8,  1,  16, &q4_K_8x1_q8_K     },
-    { "q4_K_16x1",    GGML_TYPE_Q4_K,   16, 1,  32, &q4_K_16x1_q8_K    },
-    { "q4_K_32x1",    GGML_TYPE_Q4_K,   32, 1,  64, &q4_K_32x1_q8_K    },
-    { "q4_K_64x1",    GGML_TYPE_Q4_K,   64, 1, 128, &q4_K_64x1_q8_K    },
-    { "q5_K_8x1",     GGML_TYPE_Q5_K,   8,  1,  16, &q5_K_8x1_q8_K     },
-    { "q5_K_16x1",    GGML_TYPE_Q5_K,   16, 1,  32, &q5_K_16x1_q8_K    },
-    { "q5_K_32x1",    GGML_TYPE_Q5_K,   32, 1,  64, &q5_K_32x1_q8_K    },
-    { "q5_K_64x1",    GGML_TYPE_Q5_K,   64, 1, 128, &q5_K_64x1_q8_K    },
-    { "iq4_nl_8x1",   GGML_TYPE_IQ4_NL, 8,  1,  16, &iq4_nl_8x1_q8_0   },
-    { "iq4_nl_16x1",  GGML_TYPE_IQ4_NL, 16, 1,  32, &iq4_nl_16x1_q8_0  },
-    { "iq4_nl_32x1",  GGML_TYPE_IQ4_NL, 32, 1,  64, &iq4_nl_32x1_q8_0  },
-    { "iq4_nl_64x1",  GGML_TYPE_IQ4_NL, 64, 1, 128, &iq4_nl_64x1_q8_0  },
-    { "mxfp4_8x1",    GGML_TYPE_MXFP4,  8,  1,  16, &mxfp4_8x1_q8_0    },
-    { "mxfp4_16x1",   GGML_TYPE_MXFP4,  16, 1,  32, &mxfp4_16x1_q8_0   },
-    { "mxfp4_32x1",   GGML_TYPE_MXFP4,  32, 1,  64, &mxfp4_32x1_q8_0   },
-    { "mxfp4_64x1",   GGML_TYPE_MXFP4,  64, 1, 128, &mxfp4_64x1_q8_0   },
+    { "q4_0_8x1",     GGML_TYPE_Q4_0,   8,  1,  16, 1 << 30, &q4_0_8x1_q8_0     },
+    { "q4_0_16x1",    GGML_TYPE_Q4_0,   16, 1,  32, 1 << 30, &q4_0_16x1_q8_0    },
+    { "q4_0_32x1",    GGML_TYPE_Q4_0,   32, 1,  64, 1 << 30, &q4_0_32x1_q8_0    },
+    { "q4_0_64x1",    GGML_TYPE_Q4_0,   64, 1, 128, 1 << 30, &q4_0_64x1_q8_0    },
+    { "q8_0_8x1",     GGML_TYPE_Q8_0,   8,  1,  16, 1 << 30, &q8_0_8x1_q8_0     },
+    { "q8_0_16x1",    GGML_TYPE_Q8_0,   16, 1,  32, 1 << 30, &q8_0_16x1_q8_0    },
+    { "q8_0_32x1",    GGML_TYPE_Q8_0,   32, 1,  64, 1 << 30, &q8_0_32x1_q8_0    },
+    { "q8_0_64x1",    GGML_TYPE_Q8_0,   64, 1, 128, 1 << 30, &q8_0_64x1_q8_0    },
+    { "q2_K_8x1",     GGML_TYPE_Q2_K,   8,  1,  16, 1 << 30, &q2_K_8x1_q8_K     },
+    { "q2_K_16x1",    GGML_TYPE_Q2_K,   16, 1,  32, 1 << 30, &q2_K_16x1_q8_K    },
+    { "q2_K_32x1",    GGML_TYPE_Q2_K,   32, 1,  64, 1 << 30, &q2_K_32x1_q8_K    },
+    { "q2_K_64x1",    GGML_TYPE_Q2_K,   64, 1, 128, 1 << 30, &q2_K_64x1_q8_K    },
+    { "q4_K_8x1",     GGML_TYPE_Q4_K,   8,  1,  16, 1 << 30, &q4_K_8x1_q8_K     },
+    { "q4_K_16x1",    GGML_TYPE_Q4_K,   16, 1,  32, 1 << 30, &q4_K_16x1_q8_K    },
+    { "q4_K_32x1",    GGML_TYPE_Q4_K,   32, 1,  64, 1 << 30, &q4_K_32x1_q8_K    },
+    { "q4_K_64x1",    GGML_TYPE_Q4_K,   64, 1, 128, 1 << 30, &q4_K_64x1_q8_K    },
+    { "q5_K_8x1",     GGML_TYPE_Q5_K,   8,  1,  16, 1 << 30, &q5_K_8x1_q8_K     },
+    { "q5_K_16x1",    GGML_TYPE_Q5_K,   16, 1,  32, 1 << 30, &q5_K_16x1_q8_K    },
+    { "q5_K_32x1",    GGML_TYPE_Q5_K,   32, 1,  64, 1 << 30, &q5_K_32x1_q8_K    },
+    { "q5_K_64x1",    GGML_TYPE_Q5_K,   64, 1, 128, 1 << 30, &q5_K_64x1_q8_K    },
+    { "iq4_nl_8x1",   GGML_TYPE_IQ4_NL, 8,  1,  16, 1 << 30, &iq4_nl_8x1_q8_0   },
+    { "iq4_nl_16x1",  GGML_TYPE_IQ4_NL, 16, 1,  32, 1 << 30, &iq4_nl_16x1_q8_0  },
+    { "iq4_nl_32x1",  GGML_TYPE_IQ4_NL, 32, 1,  64, 1 << 30, &iq4_nl_32x1_q8_0  },
+    { "iq4_nl_64x1",  GGML_TYPE_IQ4_NL, 64, 1, 128, 1 << 30, &iq4_nl_64x1_q8_0  },
+    { "mxfp4_8x1",    GGML_TYPE_MXFP4,  8,  1,  16, 1 << 30, &mxfp4_8x1_q8_0    },
+    { "mxfp4_16x1",   GGML_TYPE_MXFP4,  16, 1,  32, 1 << 30, &mxfp4_16x1_q8_0   },
+    { "mxfp4_32x1",   GGML_TYPE_MXFP4,  32, 1,  64, 1 << 30, &mxfp4_32x1_q8_0   },
+    { "mxfp4_64x1",   GGML_TYPE_MXFP4,  64, 1, 128, 1 << 30, &mxfp4_64x1_q8_0   },
 #endif
-    { "q4_0_8x8",     GGML_TYPE_Q4_0,   8,  8,  16, &q4_0_8x8_q8_0     },
+    { "q4_0_8x8",     GGML_TYPE_Q4_0,   8,  8,  16, 32, &q4_0_8x8_q8_0     },
 };
 
 static bool ggml_rvv_schedule_legal(const ggml_rvv_schedule_entry & e, const struct ggml_tensor * t) {
     return t->type == e.type
         && (int) __riscv_vlenb() >= e.min_vlenb
+        && (int) __riscv_vlenb() <= e.max_vlenb
         && t->ne[1] % e.nb_cols == 0
         && t->ne[0] % 8 == 0;
 }
