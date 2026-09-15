@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [vectorboundary]
-    paths: ['.github/workflows/rvv-bench.yml']
 
 jobs:
   bench:
