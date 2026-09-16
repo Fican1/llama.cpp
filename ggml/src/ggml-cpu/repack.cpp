@@ -5479,6 +5479,108 @@ static bool ggml_rvv_schedule_legal(const ggml_rvv_schedule_entry & e, const str
         && t->ne[0] % 8 == 0;
 }
 
+// Learned dispatch (VectorBoundary): scores every legal schedule for a
+// tensor with a small linear cost model fit on per-shape QEMU dynamic
+// instruction counts (vb-tools/shapes-qemu*.csv, vb-tools/eval-ranking.py),
+// instead of the fixed VLEN-matched rule below. The model predicts log
+// instructions per matmul call from (schedule tile width, tensor shape,
+// vector width); a synthetic "stay unpacked" candidate competes on equal
+// footing so small tensors can opt out of repacking.
+//
+// Stage (prefill vs decode) is not known at this call site: repack layout
+// is fixed once at weight-load time, before any inference request exists
+// (see docs/dev notes on ggml_repack_get_optimal_repack_type). GGML_RVV_PROFILE
+// selects how much weight to give each stage's predicted cost when scoring:
+// balanced (default) splits evenly; decode/prefill fully favor one stage;
+// interactive/throughput follow the service mixes with the same skew.
+struct ggml_rvv_cost_model {
+    enum ggml_type type;
+    // bias, is_norepack, is_8x8, log_m1, util, is_decode,
+    // dec_x_norepack, dec_x_8x8, prefill_x_logm1, log_N, log_K,
+    // log_vlenb, norepack_x_logvlenb
+    float w[13];
+};
+
+// Fit on vb-tools/shapes-qemu*.csv spanning VLEN 128/256/512/1024 (see
+// vb-tools/eval-ranking.py); leave-one-shape-out top-1 oracle hit rate is
+// 100% across all four widths. Re-fit and update if the kernel set changes.
+static const ggml_rvv_cost_model ggml_rvv_cost_models[] = {
+    { GGML_TYPE_Q4_0, { 6.031975f, -0.480432f, -1.445892f, -0.787501f, 0.149677f,
+                         -3.974105f, -0.541302f, 0.901406f, 0.300658f, 0.948190f,
+                         0.948190f, 0.057595f, -0.058051f } },
+};
+
+static float ggml_rvv_predicted_log_cost(const ggml_rvv_cost_model & cm, int m, bool is_norepack,
+                                          bool is_8x8, int vlenb, int64_t N, int64_t K, bool decode_profile) {
+    const float log_m1   = logf((float) m + 1.0f);
+    const float util     = m ? (2.0f * m) / (float) vlenb : 0.0f;
+    const float log_vlenb = logf((float) vlenb);
+    const float dec      = decode_profile ? 1.0f : 0.0f;
+    const float norep    = is_norepack ? 1.0f : 0.0f;
+    return cm.w[0]
+         + cm.w[1]  * norep
+         + cm.w[2]  * (is_8x8 ? 1.0f : 0.0f)
+         + cm.w[3]  * log_m1
+         + cm.w[4]  * util
+         + cm.w[5]  * dec
+         + cm.w[6]  * dec * norep
+         + cm.w[7]  * dec * (is_8x8 ? 1.0f : 0.0f)
+         + cm.w[8]  * (1.0f - dec) * log_m1
+         + cm.w[9]  * logf((float) N)
+         + cm.w[10] * logf((float) K)
+         + cm.w[11] * log_vlenb
+         + cm.w[12] * norep * log_vlenb;
+}
+
+static float ggml_rvv_profile_alpha() {
+    static const char * p = getenv("GGML_RVV_PROFILE");
+    if (!p || !*p)                  return 0.5f; // balanced
+    if (!strcmp(p, "decode"))       return 1.0f;
+    if (!strcmp(p, "prefill"))      return 0.0f;
+    if (!strcmp(p, "interactive"))  return 0.8f;
+    if (!strcmp(p, "throughput"))   return 0.2f;
+    return 0.5f;
+}
+
+static float ggml_rvv_blended_cost(const ggml_rvv_cost_model & cm, float alpha, int m, bool is_norepack,
+                                    bool is_8x8, int vlenb, int64_t N, int64_t K) {
+    return       alpha  * expf(ggml_rvv_predicted_log_cost(cm, m, is_norepack, is_8x8, vlenb, N, K, true))
+         + (1.0f - alpha) * expf(ggml_rvv_predicted_log_cost(cm, m, is_norepack, is_8x8, vlenb, N, K, false));
+}
+
+// Returns nullptr both for "no fitted model, caller should fall back" and
+// for "the model picked staying unpacked" - both mean the same thing here.
+static const ggml::cpu::tensor_traits * ggml_rvv_select_schedule_model(const struct ggml_tensor * cur) {
+    const ggml_rvv_cost_model * cm = nullptr;
+    for (const auto & c : ggml_rvv_cost_models) {
+        if (c.type == cur->type) { cm = &c; break; }
+    }
+    if (!cm) {
+        return nullptr;
+    }
+
+    const int   vlenb = (int) __riscv_vlenb();
+    const float alpha = ggml_rvv_profile_alpha();
+    const int64_t N = cur->ne[1];
+    const int64_t K = cur->ne[0];
+
+    float best_cost = ggml_rvv_blended_cost(*cm, alpha, 0, true, false, vlenb, N, K);
+    const ggml::cpu::tensor_traits * best = nullptr; // nullptr = stay unpacked
+
+    for (const auto & e : ggml_rvv_schedules) {
+        if (e.type != cur->type || !ggml_rvv_schedule_legal(e, cur)) {
+            continue;
+        }
+        const bool  is_8x8 = (e.nb_cols == 8 && e.inter_size == 8);
+        const float cost   = ggml_rvv_blended_cost(*cm, alpha, e.nb_cols, false, is_8x8, vlenb, N, K);
+        if (cost < best_cost) {
+            best_cost = cost;
+            best      = e.traits;
+        }
+    }
+    return best;
+}
+
 // GGML_RVV_SCHEDULE overrides the default choice with a comma separated list
 // of entry names; the first legal entry of the tensor type wins. A type that
 // is listed but has no legal entry stays un-repacked, so measurements are not
@@ -5507,6 +5609,19 @@ static const ggml::cpu::tensor_traits * ggml_rvv_select_schedule(const struct gg
         }
         if (listed) {
             return nullptr;
+        }
+    }
+
+    // GGML_RVV_DISPATCH=heuristic reverts to the fixed VLEN-matched rule
+    // below, for A/B comparison against the learned model.
+    static const char * dispatch_mode = getenv("GGML_RVV_DISPATCH");
+    if (!dispatch_mode || strcmp(dispatch_mode, "heuristic") != 0) {
+        bool has_model = false;
+        for (const auto & c : ggml_rvv_cost_models) {
+            if (c.type == cur->type) { has_model = true; break; }
+        }
+        if (has_model) {
+            return ggml_rvv_select_schedule_model(cur);
         }
     }
 
