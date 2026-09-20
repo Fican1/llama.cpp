@@ -1,0 +1,32 @@
+# VectorBoundary riscv64 toolchain: cross-compiler, host gcc (for the QEMU
+# instruction-count plugin), and a from-source QEMU 10 built with plugin
+# support (Debian's packaged qemu-user lacks --enable-plugins, and QEMU 8.x
+# lacks zvfh support entirely and will SIGILL on the RVV kernels here).
+#
+# build: docker build -t vb-riscv -f Dockerfile.riscv .
+FROM debian:trixie
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+        gcc g++ libc6-dev \
+        cmake ninja-build make pkg-config meson \
+        libglib2.0-dev \
+        git python3 python3-venv wget xz-utils bzip2 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build QEMU from source with plugin support. Debian's qemu-user package
+# does not enable plugins; upstream QEMU also only started shipping a usable
+# qemu-plugin.h for this purpose around v9-10.
+RUN (wget -q -O /tmp/qemu.tar.gz https://gitlab.com/qemu-project/qemu/-/archive/v10.0.13/qemu-v10.0.13.tar.gz \
+     || wget -q -O /tmp/qemu.tar.gz https://gitlab.com/qemu-project/qemu/-/archive/stable-10.0/qemu-stable-10.0.tar.gz) \
+    && mkdir /tmp/qemu-src && tar -xzf /tmp/qemu.tar.gz -C /tmp/qemu-src --strip-components=1 \
+    && rm /tmp/qemu.tar.gz \
+    && cd /tmp/qemu-src \
+    && ./configure --target-list=riscv64-linux-user --enable-plugins --disable-docs \
+    && make -j"$(nproc)" \
+    && cp build/qemu-riscv64 /usr/local/bin/qemu-riscv64 \
+    && cp include/qemu/qemu-plugin.h /usr/local/include/qemu-plugin.h \
+    && cd / && rm -rf /tmp/qemu-src \
+    && qemu-riscv64 --version
+
+WORKDIR /work
